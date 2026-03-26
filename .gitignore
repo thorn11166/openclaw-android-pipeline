@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime / generated files
+*.log
+.error-recovery.log
+.error-recovery-history.json
+.error-report-*.json
+.fixes-report-*.json
+build-logs/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android build outputs
+*.apk
+*.aab
+*.aar
+local.properties
+.gradle/

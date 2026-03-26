@@ -10,10 +10,12 @@ Usage:
 """
 
 import argparse
+import io
 import json
 import os
 import sys
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -72,7 +74,16 @@ class GitHubActionsMonitor:
         url = f"{self.base_url}/repos/{self.repo}/actions/runs/{run_id}/logs"
         response = requests.get(url, headers=self.headers, timeout=30)
         response.raise_for_status()
-        return response.text
+        # GitHub returns logs as a zip file
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(response.content))
+            logs = ""
+            for file_info in sorted(zf.filelist, key=lambda f: f.filename):
+                logs += zf.read(file_info.filename).decode("utf-8", errors="replace")
+            return logs
+        except zipfile.BadZipFile:
+            # Fall back to text if not a zip (shouldn't happen but be safe)
+            return response.text
 
     def save_logs(self, run_id: int, logs: str) -> Path:
         """
