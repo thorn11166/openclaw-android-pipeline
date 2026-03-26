@@ -41,11 +41,12 @@ Before starting, ensure you have:
 - Repos must have GitHub Actions enabled
 - Android SDK and build tools installed via action (provided in template)
 
-### 4. **Optional: Anthropic API Key (for Claude Code Review)**
-- Required for Phase 2.5 (Claude code review before push)
-- Obtain at: `https://console.anthropic.com/`
-- Store as: `ANTHROPIC_API_KEY`
-- If not provided, Phase 2.5 is skipped silently
+### 4. **Optional: Claude Code CLI (for Phase 2.5 code review)**
+- Install Claude Code: `npm install -g @anthropic-ai/claude-code`
+- The reviewer uses your existing subscription — no separate API key needed
+- Switch models at runtime via `--model` (e.g. `claude-opus-4-6`)
+- If the CLI is not on PATH, falls back to `ANTHROPIC_API_KEY` env var
+- If neither is available, Phase 2.5 is skipped silently
 
 ### 5. **Optional: Local Android SDK**
 - For testing locally before pushing to GitHub
@@ -92,11 +93,17 @@ to the code-generating model (e.g. DeepSeek) for revision.
 
 **How to run manually:**
 ```bash
+# Uses claude CLI + your subscription (default Sonnet):
 python scripts/code-reviewer.py \
   --project-dir /path/to/generated/project \
-  --api-key $ANTHROPIC_API_KEY \
   --output-json .code-review-report.json \
   --discord-webhook $DISCORD_WEBHOOK_URL
+
+# Switch to Opus for deeper review (same subscription):
+python scripts/code-reviewer.py \
+  --project-dir . \
+  --model claude-opus-4-6 \
+  --output-json .code-review-report.json
 ```
 
 **Exit codes:** `0` = passed, `1` = critical issues remain or score below threshold
@@ -213,12 +220,16 @@ python scripts/code-reviewer.py \
 | Flag | Default | Description |
 |---|---|---|
 | `--project-dir` | `.` | Root of Android project |
-| `--api-key` | `$ANTHROPIC_API_KEY` | Anthropic API key |
-| `--model` | `claude-sonnet-4-6` | Claude model (use `claude-opus-4-6` for deeper review) |
+| `--model` | `claude-sonnet-4-6` | Claude model — passed to CLI or API |
+| `--api-key` | `$ANTHROPIC_API_KEY` | Only used if `claude` CLI is not on PATH |
 | `--output-json` | *(none)* | Save full report to this file |
 | `--pass-threshold` | `60` | Min quality score to exit 0 (critical issues always fail) |
 | `--discord-webhook` | `$DISCORD_WEBHOOK_URL` | Post summary to Discord |
 | `--quiet` | off | Suppress console report |
+
+**Backend selection (automatic):**
+1. If `claude` is on PATH → uses CLI with your subscription (no extra cost/credentials)
+2. Otherwise → falls back to Anthropic API using `--api-key` / `ANTHROPIC_API_KEY`
 
 **Output JSON:**
 ```json
