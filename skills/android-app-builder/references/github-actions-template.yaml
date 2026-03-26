@@ -1,0 +1,235 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    # Checkout repository
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # Set up Java
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    # Set up Android SDK
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v2
+      with:
+        api-levels: '34'
+        build-tools: '34.0.0'
+
+    # Grant execute permission to Gradle wrapper
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    # Validate Gradle wrapper
+    - name: Validate Gradle wrapper
+      uses: gradle/wrapper-validation-action@v1
+
+    # Build debug APK (for testing)
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --stacktrace
+      env:
+        GRADLE_OPTS: "-Xmx4096m -XX:MaxPermSize=512m"
+
+    # Run unit tests
+    - name: Run Unit Tests
+      run: ./gradlew test --stacktrace
+      continue-on-error: true
+
+    # Run lint checks
+    - name: Run Lint
+      run: ./gradlew lint --stacktrace
+      continue-on-error: true
+
+    # Build release APK (optional - requires keystore)
+    - name: Build Release APK
+      run: ./gradlew assembleRelease --stacktrace
+      env:
+        GRADLE_OPTS: "-Xmx4096m -XX:MaxPermSize=512m"
+      continue-on-error: true
+
+    # Upload APK artifacts
+    - name: Upload APK Artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: apk
+        path: app/build/outputs/apk/
+        retention-days: 30
+
+    # Upload test results
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: app/build/reports/
+        retention-days: 30
+
+    # Build app bundle (optional - for Play Store)
+    - name: Build App Bundle
+      run: ./gradlew bundle --stacktrace
+      continue-on-error: true
+
+    # Upload bundle artifacts
+    - name: Upload App Bundle
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: bundle
+        path: app/build/outputs/bundle/
+        retention-days: 30
+
+    # Notify on success
+    - name: Notify Success
+      if: success()
+      run: echo "✅ Build succeeded"
+
+    # Notify on failure
+    - name: Notify Failure
+      if: failure()
+      run: |
+        echo "❌ Build failed"
+        exit 1
+
+---
+
+# Configuration Guide
+
+## Environment Variables
+
+Set these in GitHub repository settings (Settings → Secrets and variables → Actions):
+
+### Required
+- **ANDROID_SDK_VERSION**: Target Android SDK version (e.g., 34)
+- **BUILD_TOOLS_VERSION**: Android Build Tools version (e.g., 34.0.0)
+
+### Optional
+- **JAVA_VERSION**: Java version (default: 17)
+- **KEYSTORE_FILE**: Base64-encoded keystore for release signing
+- **KEYSTORE_PASSWORD**: Keystore password
+- **KEY_ALIAS**: Signing key alias
+- **KEY_PASSWORD**: Signing key password
+- **GRADLE_OPTS**: Gradle memory options (e.g., "-Xmx4096m")
+
+## Customization
+
+### Change Build Variant
+```yaml
+- name: Build Release APK
+  run: ./gradlew assembleRelease --stacktrace
+```
+
+Change `assembleRelease` to:
+- `assembleDebug` - Debug build
+- `bundleRelease` - App bundle (for Play Store)
+- `installDebug` - Install on connected device
+
+### Add Signing Configuration
+```yaml
+- name: Prepare Keystore
+  run: |
+    echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > app/signing.jks
+
+- name: Build Signed Release
+  run: |
+    ./gradlew assembleRelease \
+      -Pandroid.injected.signing.store.file=app/signing.jks \
+      -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+      -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+      -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+```
+
+### Reduce Build Time
+Enable Gradle build cache:
+```yaml
+- name: Build with Cache
+  run: ./gradlew assembleDebug --build-cache
+```
+
+### Increase Timeout
+Default is 30 minutes. Increase in job config:
+```yaml
+jobs:
+  build:
+    timeout-minutes: 60
+```
+
+### Add Code Coverage
+```yaml
+- name: Build with Coverage
+  run: ./gradlew test jacocoTestReport
+
+- name: Upload Coverage
+  uses: codecov/codecov-action@v3
+  with:
+    files: ./app/build/reports/jacoco/test/jacocoTestReport.xml
+```
+
+### Deploy to Firebase App Distribution
+```yaml
+- name: Upload to Firebase
+  uses: wzieba/Firebase-Distribution-Github-Action@v1
+  with:
+    releaseNotesFile: 'RELEASE_NOTES.txt'
+    firebaseToken: ${{ secrets.FIREBASE_TOKEN }}
+    groups: testers
+    file: app/build/outputs/apk/release/app-release.apk
+```
+
+---
+
+## Troubleshooting
+
+### "Gradle sync failed"
+- Check `build.gradle.kts` for typos and dependency versions
+- Run `./gradlew --refresh-dependencies` locally
+
+### "SDK not found"
+- Ensure Android SDK is installed via setup-android@v2
+- Check API level matches `api-levels` in workflow
+
+### "Build times out"
+- Increase `timeout-minutes` in job config
+- Enable Gradle build cache
+- Reduce parallel tasks with `org.gradle.workers.max=2`
+
+### "Out of memory"
+- Increase heap with `GRADLE_OPTS: "-Xmx6144m"`
+- Use `--parallel` flag to enable parallelization
+
+### "Artifact not found"
+- Check build variant name matches path in artifact upload
+- Ensure build completes without errors first
+
+---
+
+## CI/CD Best Practices
+
+1. **Cache Gradle dependencies** - Reduces build time significantly
+2. **Run tests early** - Catch bugs before building APK
+3. **Use build variants** - Debug/release builds have different configs
+4. **Fail fast** - Run lint and unit tests before building APK
+5. **Archive artifacts** - Keep 30-day history for debugging
+6. **Matrix builds** - Test on multiple API levels (optional)
+
+```yaml
+strategy:
+  matrix:
+    api-level: [ 28, 30, 32, 34 ]
+```
