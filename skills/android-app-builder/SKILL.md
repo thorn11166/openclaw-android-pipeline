@@ -18,6 +18,28 @@ Use this skill when:
 
 ---
 
+## Model Selection
+
+This skill supports flexible model switching between:
+- **Primary**: openrouter/deepseek/deepseek-chat ($0.14/M input tokens)
+- **Fallback**: anthropic/claude-haiku-4-5-20251001 ($0.80/M input tokens)
+
+### Switching Methods:
+1. **Session Override**: `/model anthropic/claude-opus-4-6`
+2. **Config Primary**: Edit `openclaw.json` + restart
+3. **Fallback Chain**: Add `"fallbacks": ["anthropic/claude-opus-4-6"]`
+4. **Sub-agent Spawn**: `sessions_spawn(model="anthropic/claude-opus-4-6")`
+
+### Cost Comparison (per 20 builds):
+- DeepSeek V3: ~$0.02
+- Opus 4.6: ~$2.00
+- Hybrid (80/20): ~$0.42
+
+### Recommendations:
+- Use DeepSeek for routine builds
+- Escalate to Opus for complex error resolution
+- Test model changes in `anime-calc` before production
+
 ## Requirements
 
 Before starting, ensure you have:
