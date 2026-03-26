@@ -63,7 +63,12 @@ Before starting, ensure you have:
 - Repos must have GitHub Actions enabled
 - Android SDK and build tools installed via action (provided in template)
 
-### 4. **Optional: Local Android SDK**
+### 4. **Phase 2.5 Code Review — no extra setup required**
+- Uses `sessions_spawn(model="anthropic/claude-sonnet-4-6")` — OpenClaw native
+- Runs on your existing subscription, no separate API key needed
+- Switch to Opus for deeper review: `sessions_spawn(model="anthropic/claude-opus-4-6")`
+
+### 5. **Optional: Local Android SDK**
 - For testing locally before pushing to GitHub
 - Set `ANDROID_HOME` env var
 - Not required if relying on GitHub Actions
@@ -83,6 +88,61 @@ Before starting, ensure you have:
 3. Generates `build.gradle.kts` with correct dependencies
 4. Scaffolds basic UI layout files
 5. Bundles into a clean project structure
+
+### Phase 2.5: Claude Code Review *(always runs — uses your existing subscription)*
+
+This phase uses a higher-capability Claude model to review the code DeepSeek just
+generated, catching build-blocking issues before they ever hit CI/CD. The review
+runs via `sessions_spawn()` — OpenClaw's native sub-agent mechanism — so it uses
+your existing subscription with no separate API key or credentials.
+
+**Flow (Zoidberg orchestrates all steps):**
+
+```
+Step 1 — Collect files & build prompt:
+  python scripts/code-reviewer.py \
+    --project-dir . \
+    --output-prompt .review-prompt.txt
+
+Step 2 — Spawn Claude sub-agent for review:
+  sessions_spawn(model="anthropic/claude-sonnet-4-6", prompt_file=".review-prompt.txt")
+  → save response to .review-response.txt
+
+Step 3 — Parse response into structured report:
+  python scripts/code-reviewer.py \
+    --response-file .review-response.txt \
+    --output-json .code-review-report.json \
+    --discord-webhook $DISCORD_WEBHOOK_URL
+  → exits 0 (passed) or 1 (critical issues / score < 60)
+
+Step 4 — If exit 1:
+  Read prompt_for_model from .code-review-report.json
+  Send it to DeepSeek as its next instruction
+  DeepSeek revises the affected files
+  Repeat from Step 1 (max 2 revision rounds)
+
+Step 5 — If exit 0 (or after 2 revision rounds):
+  Proceed to Phase 3 (GitHub push)
+```
+
+**Model options (switch at Step 2):**
+- `anthropic/claude-sonnet-4-6` — default, fast, catches most issues
+- `anthropic/claude-opus-4-6` — deeper review for complex architectures
+
+**What Claude reviews:**
+- **critical** — will prevent the project from building
+- **high** — likely runtime crash or serious architecture violation
+- **medium** — best-practice violations
+- **low** — style and minor improvements
+- Security, missing resources, deprecated Gradle APIs
+
+**The `prompt_for_model` field** is a complete, copy-pasteable instruction for
+DeepSeek — no reformatting needed:
+> "In MainActivity.kt line 21, the theme Theme.MaterialComponents.Light includes
+> a built-in ActionBar which conflicts with setSupportActionBar(). Change the
+> parent in themes.xml to Theme.MaterialComponents.Light.NoActionBar."
+
+---
 
 ### Phase 3: GitHub Integration
 1. Creates a new repository on GitHub
@@ -153,6 +213,94 @@ Before starting, ensure you have:
 ---
 
 ## File Reference
+
+### Code Review Script
+
+#### **code-reviewer.py** — Claude Code Review (Phase 2.5)
+Two-mode helper script that brackets a `sessions_spawn()` call. No model
+credentials required — the actual review runs through OpenClaw's native
+sub-agent mechanism using your existing subscription.
+
+**Mode 1 — Build prompt** (`--output-prompt`):
+Collect all `.kt`/`.java`/`.xml`/`.kts` files and write a structured review
+prompt to a file. Zoidberg then passes that file to `sessions_spawn()`.
+
+**Mode 2 — Parse response** (`--response-file`):
+Read the raw JSON from the sub-agent, produce a normalised report, print a
+formatted summary, and exit 0 (passed) or 1 (issues found / low score).
+
+**Step 1 — Build prompt:**
+```bash
+python scripts/code-reviewer.py \
+  --project-dir /path/to/project \
+  --output-prompt .review-prompt.txt
+```
+
+**Step 2 — Zoidberg spawns sub-agent (no script needed):**
+```
+sessions_spawn(model="anthropic/claude-sonnet-4-6", prompt_file=".review-prompt.txt")
+# or for deeper review:
+sessions_spawn(model="anthropic/claude-opus-4-6", prompt_file=".review-prompt.txt")
+```
+
+**Step 3 — Parse response:**
+```bash
+python scripts/code-reviewer.py \
+  --response-file .review-response.txt \
+  --output-json .code-review-report.json \
+  --model-used anthropic/claude-sonnet-4-6 \
+  --discord-webhook $DISCORD_WEBHOOK_URL \
+  --pass-threshold 60
+```
+
+**Key arguments:**
+| Flag | Mode | Default | Description |
+|---|---|---|---|
+| `--project-dir` | 1 | `.` | Root of Android project |
+| `--output-prompt` | 1 | — | Write review prompt to this file |
+| `--response-file` | 2 | — | Raw JSON response from sub-agent |
+| `--model-used` | 2 | `anthropic/claude-sonnet-4-6` | Recorded in report |
+| `--output-json` | 2 | — | Save parsed report to this file |
+| `--pass-threshold` | 2 | `60` | Min quality score to exit 0 |
+| `--discord-webhook` | 2 | — | Post summary to Discord |
+| `--quiet` | 2 | off | Suppress console report |
+
+**Output JSON (from Mode 2):**
+```json
+{
+  "timestamp": "2026-03-26T12:00:00",
+  "model_used": "anthropic/claude-sonnet-4-6",
+  "overall_quality": "fair",
+  "quality_score": 62,
+  "summary": "Code has one build-blocking issue and two high-severity problems.",
+  "issues": [
+    {
+      "severity": "critical",
+      "category": "build",
+      "file": "activity_main.xml",
+      "line": 11,
+      "issue": "Unknown class com.google.android.material.appbarwith.MaterialToolbar",
+      "suggestion": "Change `appbarwith` to `appbar` in the fully qualified class name."
+    }
+  ],
+  "issue_counts": { "critical": 1, "high": 2, "medium": 0, "low": 1 },
+  "prompt_for_model": "Please fix the following issues in the generated code: ...",
+  "passed": false
+}
+```
+
+**How `prompt_for_model` is used:**
+```
+Zoidberg reads .code-review-report.json
+  └─ if not passed:
+       send prompt_for_model to DeepSeek as next instruction
+       DeepSeek revises files
+       repeat from Step 1 (max 2 rounds)
+  └─ if passed:
+       continue to Phase 3 (GitHub push)
+```
+
+---
 
 ### Error Recovery Scripts
 

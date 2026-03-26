@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Light Theme (Material 3) -->
-    <style name="Theme.BasicApp" parent="Theme.MaterialComponents.Light">
+    <style name="Theme.BasicApp" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="colorPrimary">@color/md_theme_light_primary</item>
         <item name="colorOnPrimary">@color/md_theme_light_onPrimary</item>
         <item name="colorPrimaryContainer">@color/md_theme_light_primaryContainer</item>
