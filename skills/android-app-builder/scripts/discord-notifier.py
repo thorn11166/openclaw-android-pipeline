@@ -251,6 +251,7 @@ def main():
     parser.add_argument("--error-summary", help="Error summary if failed")
     parser.add_argument("--retry-count", type=int, default=0, help="Retry attempt number")
     parser.add_argument("--milestone", help="Milestone message (alternative to --status)")
+    parser.add_argument("--project-name", default="Project", help="Project name for milestone notifications")
     parser.add_argument(
         "--milestone-description", help="Milestone description"
     )
@@ -282,7 +283,7 @@ def main():
             )
         elif args.milestone:
             success = notifier.send_milestone(
-                args.milestone,
+                args.project_name,
                 args.milestone,
                 args.milestone_description or "",
             )

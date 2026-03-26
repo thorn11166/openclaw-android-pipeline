@@ -240,7 +240,7 @@ class ErrorRecoveryOrchestrator:
                     "success",
                     run_id,
                     f"Build succeeded after {attempt} retry attempt(s)",
-                    attempt,
+                    retry=attempt,
                 )
                 self._save_recovery_log()
                 return True
@@ -305,7 +305,7 @@ class ErrorRecoveryOrchestrator:
                 timeout=30,
             )
 
-            if result.returncode != 0 and not result.stdout:
+            if result.returncode != 0:
                 self._log(f"⚠️  Error parser failed: {result.stderr}")
                 return None
 
@@ -591,8 +591,11 @@ class ErrorRecoveryOrchestrator:
     def _log(self, message: str) -> None:
         """Log message."""
         logger.info(message)
-        with open(self.error_recovery_log, "a") as f:
-            f.write(f"{datetime.now().isoformat()} {message}\n")
+        try:
+            with open(self.error_recovery_log, "a") as f:
+                f.write(f"{datetime.now().isoformat()} {message}\n")
+        except Exception as e:
+            logger.warning(f"Failed to write to log file: {e}")
 
     def _save_recovery_log(self) -> None:
         """Save recovery history to JSON."""

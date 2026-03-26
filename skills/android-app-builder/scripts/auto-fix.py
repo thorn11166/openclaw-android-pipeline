@@ -188,7 +188,7 @@ class AndroidBuildAutoFixer:
             )
 
         # Suggest enabling AndroidX
-        if "androidx" not in message.lower():
+        if "androidx" in message.lower():
             fixes.append(
                 FixSuggestion(
                     strategy=FixStrategy.ENABLE_ANDROIDX.value,
@@ -345,7 +345,7 @@ class AndroidBuildAutoFixer:
         }
 
         for key, value in updates_map.items():
-            if key.startswith(artifact.split(":")[0] if ":" in artifact else artifact):
+            if key == artifact:
                 return value
 
         return None
@@ -423,6 +423,7 @@ class AndroidBuildAutoFixer:
             logger.info(f"Updated {artifact} to {new_version}")
             return True
 
+        logger.warning(f"Could not find dependency pattern for {artifact}:{old_version} in build.gradle.kts")
         return False
 
     def _apply_sdk_version_update(self, fix: FixSuggestion) -> bool:
