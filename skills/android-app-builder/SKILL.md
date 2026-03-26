@@ -41,7 +41,13 @@ Before starting, ensure you have:
 - Repos must have GitHub Actions enabled
 - Android SDK and build tools installed via action (provided in template)
 
-### 4. **Optional: Local Android SDK**
+### 4. **Optional: Anthropic API Key (for Claude Code Review)**
+- Required for Phase 2.5 (Claude code review before push)
+- Obtain at: `https://console.anthropic.com/`
+- Store as: `ANTHROPIC_API_KEY`
+- If not provided, Phase 2.5 is skipped silently
+
+### 5. **Optional: Local Android SDK**
 - For testing locally before pushing to GitHub
 - Set `ANDROID_HOME` env var
 - Not required if relying on GitHub Actions
@@ -61,6 +67,51 @@ Before starting, ensure you have:
 3. Generates `build.gradle.kts` with correct dependencies
 4. Scaffolds basic UI layout files
 5. Bundles into a clean project structure
+
+### Phase 2.5: Claude Code Review *(runs if `ANTHROPIC_API_KEY` is set)*
+
+This phase uses a higher-capability Claude model to review the code the cheaper
+model just generated — catching build-blocking issues before they ever reach CI/CD.
+Claude's findings are formatted as a `prompt_for_model` field that gets fed back
+to the code-generating model (e.g. DeepSeek) for revision.
+
+1. **`code-reviewer.py`** scans all `.kt`, `.java`, `.xml`, and `.kts` files
+2. Sends them to the Claude API for review
+3. Claude returns a structured JSON report covering:
+   - **critical** — will prevent the project from building
+   - **high** — likely runtime crash or serious architecture violation
+   - **medium** — best-practice violations
+   - **low** — style and minor improvements
+4. If any `critical` issues are found OR `quality_score < 60`:
+   - Read `prompt_for_model` from the review JSON
+   - Feed that prompt to the code-generating model as its next instruction
+   - The model revises the affected files
+   - Re-run `code-reviewer.py` to verify the fixes (max 2 revision rounds)
+5. Once review passes (or no API key is set), proceed to Phase 3
+6. Review summary posted to Discord (optional)
+
+**How to run manually:**
+```bash
+python scripts/code-reviewer.py \
+  --project-dir /path/to/generated/project \
+  --api-key $ANTHROPIC_API_KEY \
+  --output-json .code-review-report.json \
+  --discord-webhook $DISCORD_WEBHOOK_URL
+```
+
+**Exit codes:** `0` = passed, `1` = critical issues remain or score below threshold
+
+**The `prompt_for_model` field example:**
+> "In MainActivity.kt, change the setSupportActionBar call — the current theme
+> Theme.MaterialComponents.Light includes an ActionBar, which conflicts with a
+> custom Toolbar and will crash at runtime. Change the parent theme to
+> Theme.MaterialComponents.Light.NoActionBar. Also in activity_main.xml line 11,
+> fix the class name: `appbarwith` should be `appbar`."
+
+This prompt can be copy-pasted or piped directly into the next instruction to
+the code-generating model, requiring no manual intervention.
+
+---
 
 ### Phase 3: GitHub Integration
 1. Creates a new repository on GitHub
@@ -131,6 +182,81 @@ Before starting, ensure you have:
 ---
 
 ## File Reference
+
+### Code Review Script
+
+#### **code-reviewer.py** — Claude Code Review (Phase 2.5)
+Reviews AI-generated Android source code using the Claude API. Produces a
+structured JSON report and a `prompt_for_model` field ready to feed back to
+the cheaper code-generating model for targeted revisions.
+
+**Features:**
+- Reviews `.kt`, `.java`, `.xml`, `.kts` files; skips build artefacts automatically
+- Classifies issues as critical / high / medium / low
+- Returns `quality_score` (0–100) and `overall_quality` rating
+- `prompt_for_model`: a complete, self-contained revision instruction for DeepSeek
+- Optional Discord notification with issue summary embed
+- Exit code `0` = passed, `1` = critical issues or below threshold
+
+**Usage:**
+```bash
+python scripts/code-reviewer.py \
+  --project-dir /path/to/project \
+  --api-key $ANTHROPIC_API_KEY \
+  --output-json .code-review-report.json \
+  --discord-webhook $DISCORD_WEBHOOK_URL \
+  --model claude-sonnet-4-6 \
+  --pass-threshold 60
+```
+
+**Key arguments:**
+| Flag | Default | Description |
+|---|---|---|
+| `--project-dir` | `.` | Root of Android project |
+| `--api-key` | `$ANTHROPIC_API_KEY` | Anthropic API key |
+| `--model` | `claude-sonnet-4-6` | Claude model (use `claude-opus-4-6` for deeper review) |
+| `--output-json` | *(none)* | Save full report to this file |
+| `--pass-threshold` | `60` | Min quality score to exit 0 (critical issues always fail) |
+| `--discord-webhook` | `$DISCORD_WEBHOOK_URL` | Post summary to Discord |
+| `--quiet` | off | Suppress console report |
+
+**Output JSON:**
+```json
+{
+  "timestamp": "2026-03-26T12:00:00",
+  "model_used": "claude-sonnet-4-6",
+  "reviewed_files": ["MainActivity.kt", "activity_main.xml"],
+  "overall_quality": "fair",
+  "quality_score": 62,
+  "summary": "Code has one build-blocking issue and two high-severity problems.",
+  "issues": [
+    {
+      "severity": "critical",
+      "category": "build",
+      "file": "activity_main.xml",
+      "line": 11,
+      "issue": "Unknown class com.google.android.material.appbarwith.MaterialToolbar",
+      "suggestion": "Change `appbarwith` to `appbar` in the fully qualified class name."
+    }
+  ],
+  "issue_counts": { "critical": 1, "high": 2, "medium": 0, "low": 1 },
+  "prompt_for_model": "Please fix the following issues in the generated code: ...",
+  "passed": false
+}
+```
+
+**How `prompt_for_model` is used:**
+```
+Agent reads .code-review-report.json
+  └─ if not passed:
+       prompt_for_model → sent to DeepSeek as next instruction
+       DeepSeek revises files
+       code-reviewer.py runs again (max 2 rounds)
+  └─ if passed:
+       continue to Phase 3 (GitHub push)
+```
+
+---
 
 ### Error Recovery Scripts
 
