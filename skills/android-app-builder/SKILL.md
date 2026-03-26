@@ -41,12 +41,10 @@ Before starting, ensure you have:
 - Repos must have GitHub Actions enabled
 - Android SDK and build tools installed via action (provided in template)
 
-### 4. **Optional: Claude Code CLI (for Phase 2.5 code review)**
-- Install Claude Code: `npm install -g @anthropic-ai/claude-code`
-- The reviewer uses your existing subscription — no separate API key needed
-- Switch models at runtime via `--model` (e.g. `claude-opus-4-6`)
-- If the CLI is not on PATH, falls back to `ANTHROPIC_API_KEY` env var
-- If neither is available, Phase 2.5 is skipped silently
+### 4. **Phase 2.5 Code Review — no extra setup required**
+- Uses `sessions_spawn(model="anthropic/claude-sonnet-4-6")` — OpenClaw native
+- Runs on your existing subscription, no separate API key needed
+- Switch to Opus for deeper review: `sessions_spawn(model="anthropic/claude-opus-4-6")`
 
 ### 5. **Optional: Local Android SDK**
 - For testing locally before pushing to GitHub
@@ -69,54 +67,58 @@ Before starting, ensure you have:
 4. Scaffolds basic UI layout files
 5. Bundles into a clean project structure
 
-### Phase 2.5: Claude Code Review *(runs if `ANTHROPIC_API_KEY` is set)*
+### Phase 2.5: Claude Code Review *(always runs — uses your existing subscription)*
 
-This phase uses a higher-capability Claude model to review the code the cheaper
-model just generated — catching build-blocking issues before they ever reach CI/CD.
-Claude's findings are formatted as a `prompt_for_model` field that gets fed back
-to the code-generating model (e.g. DeepSeek) for revision.
+This phase uses a higher-capability Claude model to review the code DeepSeek just
+generated, catching build-blocking issues before they ever hit CI/CD. The review
+runs via `sessions_spawn()` — OpenClaw's native sub-agent mechanism — so it uses
+your existing subscription with no separate API key or credentials.
 
-1. **`code-reviewer.py`** scans all `.kt`, `.java`, `.xml`, and `.kts` files
-2. Sends them to the Claude API for review
-3. Claude returns a structured JSON report covering:
-   - **critical** — will prevent the project from building
-   - **high** — likely runtime crash or serious architecture violation
-   - **medium** — best-practice violations
-   - **low** — style and minor improvements
-4. If any `critical` issues are found OR `quality_score < 60`:
-   - Read `prompt_for_model` from the review JSON
-   - Feed that prompt to the code-generating model as its next instruction
-   - The model revises the affected files
-   - Re-run `code-reviewer.py` to verify the fixes (max 2 revision rounds)
-5. Once review passes (or no API key is set), proceed to Phase 3
-6. Review summary posted to Discord (optional)
+**Flow (Zoidberg orchestrates all steps):**
 
-**How to run manually:**
-```bash
-# Uses claude CLI + your subscription (default Sonnet):
-python scripts/code-reviewer.py \
-  --project-dir /path/to/generated/project \
-  --output-json .code-review-report.json \
-  --discord-webhook $DISCORD_WEBHOOK_URL
+```
+Step 1 — Collect files & build prompt:
+  python scripts/code-reviewer.py \
+    --project-dir . \
+    --output-prompt .review-prompt.txt
 
-# Switch to Opus for deeper review (same subscription):
-python scripts/code-reviewer.py \
-  --project-dir . \
-  --model claude-opus-4-6 \
-  --output-json .code-review-report.json
+Step 2 — Spawn Claude sub-agent for review:
+  sessions_spawn(model="anthropic/claude-sonnet-4-6", prompt_file=".review-prompt.txt")
+  → save response to .review-response.txt
+
+Step 3 — Parse response into structured report:
+  python scripts/code-reviewer.py \
+    --response-file .review-response.txt \
+    --output-json .code-review-report.json \
+    --discord-webhook $DISCORD_WEBHOOK_URL
+  → exits 0 (passed) or 1 (critical issues / score < 60)
+
+Step 4 — If exit 1:
+  Read prompt_for_model from .code-review-report.json
+  Send it to DeepSeek as its next instruction
+  DeepSeek revises the affected files
+  Repeat from Step 1 (max 2 revision rounds)
+
+Step 5 — If exit 0 (or after 2 revision rounds):
+  Proceed to Phase 3 (GitHub push)
 ```
 
-**Exit codes:** `0` = passed, `1` = critical issues remain or score below threshold
+**Model options (switch at Step 2):**
+- `anthropic/claude-sonnet-4-6` — default, fast, catches most issues
+- `anthropic/claude-opus-4-6` — deeper review for complex architectures
 
-**The `prompt_for_model` field example:**
-> "In MainActivity.kt, change the setSupportActionBar call — the current theme
-> Theme.MaterialComponents.Light includes an ActionBar, which conflicts with a
-> custom Toolbar and will crash at runtime. Change the parent theme to
-> Theme.MaterialComponents.Light.NoActionBar. Also in activity_main.xml line 11,
-> fix the class name: `appbarwith` should be `appbar`."
+**What Claude reviews:**
+- **critical** — will prevent the project from building
+- **high** — likely runtime crash or serious architecture violation
+- **medium** — best-practice violations
+- **low** — style and minor improvements
+- Security, missing resources, deprecated Gradle APIs
 
-This prompt can be copy-pasted or piped directly into the next instruction to
-the code-generating model, requiring no manual intervention.
+**The `prompt_for_model` field** is a complete, copy-pasteable instruction for
+DeepSeek — no reformatting needed:
+> "In MainActivity.kt line 21, the theme Theme.MaterialComponents.Light includes
+> a built-in ActionBar which conflicts with setSupportActionBar(). Change the
+> parent in themes.xml to Theme.MaterialComponents.Light.NoActionBar."
 
 ---
 
@@ -193,50 +195,59 @@ the code-generating model, requiring no manual intervention.
 ### Code Review Script
 
 #### **code-reviewer.py** — Claude Code Review (Phase 2.5)
-Reviews AI-generated Android source code using the Claude API. Produces a
-structured JSON report and a `prompt_for_model` field ready to feed back to
-the cheaper code-generating model for targeted revisions.
+Two-mode helper script that brackets a `sessions_spawn()` call. No model
+credentials required — the actual review runs through OpenClaw's native
+sub-agent mechanism using your existing subscription.
 
-**Features:**
-- Reviews `.kt`, `.java`, `.xml`, `.kts` files; skips build artefacts automatically
-- Classifies issues as critical / high / medium / low
-- Returns `quality_score` (0–100) and `overall_quality` rating
-- `prompt_for_model`: a complete, self-contained revision instruction for DeepSeek
-- Optional Discord notification with issue summary embed
-- Exit code `0` = passed, `1` = critical issues or below threshold
+**Mode 1 — Build prompt** (`--output-prompt`):
+Collect all `.kt`/`.java`/`.xml`/`.kts` files and write a structured review
+prompt to a file. Zoidberg then passes that file to `sessions_spawn()`.
 
-**Usage:**
+**Mode 2 — Parse response** (`--response-file`):
+Read the raw JSON from the sub-agent, produce a normalised report, print a
+formatted summary, and exit 0 (passed) or 1 (issues found / low score).
+
+**Step 1 — Build prompt:**
 ```bash
 python scripts/code-reviewer.py \
   --project-dir /path/to/project \
-  --api-key $ANTHROPIC_API_KEY \
+  --output-prompt .review-prompt.txt
+```
+
+**Step 2 — Zoidberg spawns sub-agent (no script needed):**
+```
+sessions_spawn(model="anthropic/claude-sonnet-4-6", prompt_file=".review-prompt.txt")
+# or for deeper review:
+sessions_spawn(model="anthropic/claude-opus-4-6", prompt_file=".review-prompt.txt")
+```
+
+**Step 3 — Parse response:**
+```bash
+python scripts/code-reviewer.py \
+  --response-file .review-response.txt \
   --output-json .code-review-report.json \
+  --model-used anthropic/claude-sonnet-4-6 \
   --discord-webhook $DISCORD_WEBHOOK_URL \
-  --model claude-sonnet-4-6 \
   --pass-threshold 60
 ```
 
 **Key arguments:**
-| Flag | Default | Description |
-|---|---|---|
-| `--project-dir` | `.` | Root of Android project |
-| `--model` | `claude-sonnet-4-6` | Claude model — passed to CLI or API |
-| `--api-key` | `$ANTHROPIC_API_KEY` | Only used if `claude` CLI is not on PATH |
-| `--output-json` | *(none)* | Save full report to this file |
-| `--pass-threshold` | `60` | Min quality score to exit 0 (critical issues always fail) |
-| `--discord-webhook` | `$DISCORD_WEBHOOK_URL` | Post summary to Discord |
-| `--quiet` | off | Suppress console report |
+| Flag | Mode | Default | Description |
+|---|---|---|---|
+| `--project-dir` | 1 | `.` | Root of Android project |
+| `--output-prompt` | 1 | — | Write review prompt to this file |
+| `--response-file` | 2 | — | Raw JSON response from sub-agent |
+| `--model-used` | 2 | `anthropic/claude-sonnet-4-6` | Recorded in report |
+| `--output-json` | 2 | — | Save parsed report to this file |
+| `--pass-threshold` | 2 | `60` | Min quality score to exit 0 |
+| `--discord-webhook` | 2 | — | Post summary to Discord |
+| `--quiet` | 2 | off | Suppress console report |
 
-**Backend selection (automatic):**
-1. If `claude` is on PATH → uses CLI with your subscription (no extra cost/credentials)
-2. Otherwise → falls back to Anthropic API using `--api-key` / `ANTHROPIC_API_KEY`
-
-**Output JSON:**
+**Output JSON (from Mode 2):**
 ```json
 {
   "timestamp": "2026-03-26T12:00:00",
-  "model_used": "claude-sonnet-4-6",
-  "reviewed_files": ["MainActivity.kt", "activity_main.xml"],
+  "model_used": "anthropic/claude-sonnet-4-6",
   "overall_quality": "fair",
   "quality_score": 62,
   "summary": "Code has one build-blocking issue and two high-severity problems.",
@@ -258,11 +269,11 @@ python scripts/code-reviewer.py \
 
 **How `prompt_for_model` is used:**
 ```
-Agent reads .code-review-report.json
+Zoidberg reads .code-review-report.json
   └─ if not passed:
-       prompt_for_model → sent to DeepSeek as next instruction
+       send prompt_for_model to DeepSeek as next instruction
        DeepSeek revises files
-       code-reviewer.py runs again (max 2 rounds)
+       repeat from Step 1 (max 2 rounds)
   └─ if passed:
        continue to Phase 3 (GitHub push)
 ```
