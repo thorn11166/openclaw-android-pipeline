@@ -1,0 +1,322 @@
+================================================================================
+OPENCLAW SESSION BRIEFING
+Date: 2026-03-26
+Repository: thorn11166/openclaw-android-pipeline
+Branch merged to main: claude/review-and-fix-repo-2G2gH
+================================================================================
+
+This document summarises all changes made to the openclaw-android-pipeline
+repository during a Claude Code review session. All changes are now live on
+the main branch (merged via PR #2).
+
+--------------------------------------------------------------------------------
+SECTION 1 — BUG FIXES IN PIPELINE SCRIPTS
+Location: skills/android-app-builder/scripts/
+--------------------------------------------------------------------------------
+
+Four Python scripts had confirmed bugs that would cause silent failures or
+incorrect behaviour at runtime. All have been fixed.
+
+--- error-recovery.py ---
+
+BUG 1: Error parser failure check was wrong.
+  Old: if result.returncode != 0 and not result.stdout:
+  New: if result.returncode != 0:
+  Reason: The original condition only caught failures when stdout was also
+  empty. If the error parser wrote anything to stdout before failing, the
+  failure was silently swallowed and recovery would proceed on bad data.
+
+BUG 2: Retry count never appeared in Discord notifications.
+  Old: self._notify_discord("status", "success", run_id, "...", attempt)
+  New: self._notify_discord("status", "success", run_id, "...", retry=attempt)
+  Reason: The _notify_discord method reads retry from **kwargs, so passing
+  it as a positional argument meant it was always ignored. The Discord embed
+  would always show retry count as 0.
+
+BUG 3: _log() could crash the entire orchestrator.
+  Old: with open(self.error_recovery_log, "a") as f: (no error handling)
+  New: wrapped in try/except with logger.warning on failure
+  Reason: If the log file path was unwritable for any reason, the unhandled
+  exception would crash the orchestrator mid-recovery.
+
+--- auto-fix.py ---
+
+BUG 4: AndroidX detection condition was inverted.
+  Old: if "androidx" not in message.lower():
+  New: if "androidx" in message.lower():
+  Reason: The code was suggesting enabling AndroidX for every Gradle error
+  that had nothing to do with AndroidX, and doing nothing for errors that
+  actually mentioned AndroidX.
+
+BUG 5: Artifact matching used startswith, causing wrong version lookups.
+  Old: if key.startswith(artifact.split(":")[0] if ":" in artifact else artifact):
+  New: if key == artifact:
+  Reason: startswith would match "androidx.appcompat:appcompat" when looking
+  up "androidx.appcompat" but could also incorrectly match other packages
+  that share the same namespace prefix, potentially applying the wrong
+  recommended version.
+
+BUG 6: Silent failure when dependency pattern not found.
+  Old: return False  (no logging)
+  New: logger.warning(f"Could not find dependency pattern for {artifact}...")
+  Reason: When a dependency update failed to match in build.gradle.kts, it
+  returned False with no indication of why, making debugging very difficult.
+
+--- build-monitor.py ---
+
+BUG 7: GitHub log download returned garbled binary data.
+  Old: return response.text
+  New: zipfile.ZipFile extraction with decode("utf-8", errors="replace")
+  Reason: The GitHub Actions API returns logs as a binary ZIP file, not
+  plain text. Calling response.text on binary content produced garbage that
+  would break error-parser.py on every build failure.
+  Also added: import io, import zipfile at the top of the file.
+
+--- discord-notifier.py ---
+
+BUG 8: Milestone notifications used the wrong project name.
+  Old: notifier.send_milestone(args.milestone, args.milestone, ...)
+  New: notifier.send_milestone(args.project_name, args.milestone, ...)
+  Also added: --project-name argument (default: "Project")
+  Reason: The milestone text was being passed as both the project_name and
+  the milestone parameters, so notifications showed the milestone text twice
+  instead of "ProjectName — MilestoneText".
+
+--------------------------------------------------------------------------------
+SECTION 2 — BUILD TEMPLATE FIXES
+Location: skills/android-app-builder/assets/basic-android-app/
+--------------------------------------------------------------------------------
+
+The basic-android-app template (used to generate new projects) had several
+issues that would cause every generated app to fail to build.
+
+--- activity_main.xml ---
+
+FIX 1: Typo in MaterialToolbar class name. (CRITICAL — build failure)
+  Old: com.google.android.material.appbarwith.MaterialToolbar
+  New: com.google.android.material.appbar.MaterialToolbar
+  Reason: "appbarwith" is not a real package. AAPT2 would reject the layout
+  file with "Unknown class" on every generated app.
+
+--- themes.xml ---
+
+FIX 2: Wrong theme parent caused runtime crash.
+  Old: parent="Theme.MaterialComponents.Light"
+  New: parent="Theme.MaterialComponents.Light.NoActionBar"
+  Reason: MainActivity calls setSupportActionBar(binding.toolbar). When the
+  theme already provides a system ActionBar (non-NoActionBar variant), this
+  call throws IllegalStateException at runtime and crashes the app immediately
+  on launch.
+
+--- build.gradle.kts ---
+
+FIX 3: Deprecated packagingOptions block.
+  Old: packagingOptions { resources { ... } }
+  New: packaging { resources { ... } }
+  Reason: packagingOptions was deprecated in AGP 7.0 and will become an
+  error in a future AGP version.
+
+--- NEW FILE: gradle.properties ---
+
+Added with the following settings:
+  org.gradle.jvmargs=-Xmx4096m
+  org.gradle.parallel=true
+  org.gradle.caching=true
+  android.useAndroidX=true
+  android.enableJetifier=true
+  kotlin.incremental=true
+Reason: Without gradle.properties, AndroidX is not configured and AGP/JDK
+compatibility settings are missing. This was causing build failures on
+generated projects.
+
+--- NEW FILE: gradle/wrapper/gradle-wrapper.properties ---
+
+Added pinning Gradle 8.4.
+Reason: Without this file, ./gradlew cannot bootstrap and the build cannot
+run at all.
+
+--- NEW FILE: proguard-rules.pro ---
+
+Added with standard keep rules for AndroidX, Parcelable, enums, Serializable.
+Reason: build.gradle.kts explicitly references "proguard-rules.pro" in the
+release build configuration. Release builds would fail with "file not found"
+without it.
+
+--- NEW FILES: Launcher icon resources ---
+
+Added the following XML-based launcher icons (no binary PNG files needed):
+  res/drawable/ic_launcher_background.xml   — solid primary colour rectangle
+  res/drawable/ic_launcher_foreground.xml   — white circle vector (placeholder)
+  res/mipmap-anydpi-v26/ic_launcher.xml     — adaptive icon for API 26+
+  res/mipmap-anydpi-v26/ic_launcher_round.xml — adaptive round icon for API 26+
+  res/mipmap-anydpi/ic_launcher.xml         — shape fallback for API 24-25
+  res/mipmap-anydpi/ic_launcher_round.xml   — oval fallback for API 24-25
+
+Reason: AndroidManifest.xml references @mipmap/ic_launcher and
+@mipmap/ic_launcher_round. Without these files, AAPT2 fails with
+"resource not found" on every generated app.
+
+--------------------------------------------------------------------------------
+SECTION 3 — NEW FEATURE: CLAUDE CODE REVIEW SKILL (PHASE 2.5)
+Location: skills/android-app-builder/scripts/code-reviewer.py
+          skills/android-app-builder/SKILL.md (updated)
+--------------------------------------------------------------------------------
+
+A new code review step has been added to the android-app-builder skill. It
+slots between Phase 2 (code generation by DeepSeek) and Phase 3 (GitHub push),
+using a Claude sub-agent to review the generated code before it ever reaches
+CI/CD. This saves build time and cost by catching problems early.
+
+HOW IT WORKS:
+
+The review is split into two script calls that bracket a sessions_spawn() call
+by Zoidberg. No API key or separate credentials are needed — sessions_spawn
+uses the existing OpenClaw subscription.
+
+  Step 1 — Build the review prompt (python script):
+    python scripts/code-reviewer.py \
+      --project-dir . \
+      --output-prompt .review-prompt.txt
+
+    The script collects all .kt, .java, .xml, and .kts source files from the
+    project (skipping build/, .gradle/, generated/ directories and files over
+    40KB). It formats them into a structured prompt and writes it to a file.
+
+  Step 2 — Zoidberg spawns Claude sub-agent:
+    sessions_spawn(model="anthropic/claude-sonnet-4-6", prompt_file=".review-prompt.txt")
+
+    The sub-agent reviews the code and returns a JSON response. Zoidberg saves
+    this to .review-response.txt.
+
+    To use Opus for a deeper review:
+    sessions_spawn(model="anthropic/claude-opus-4-6", prompt_file=".review-prompt.txt")
+
+  Step 3 — Parse the response (python script):
+    python scripts/code-reviewer.py \
+      --response-file .review-response.txt \
+      --output-json .code-review-report.json \
+      --model-used anthropic/claude-sonnet-4-6 \
+      --discord-webhook $DISCORD_WEBHOOK_URL
+
+    The script parses the sub-agent's JSON, produces a normalised report,
+    prints a formatted summary to console, optionally posts to Discord, and
+    exits 0 (passed) or 1 (issues found or quality score below threshold).
+
+  Step 4 — If exit code is 1 (review failed):
+    Read the "prompt_for_model" field from .code-review-report.json.
+    Send that text to DeepSeek as its next instruction.
+    DeepSeek revises the affected files.
+    Repeat from Step 1 (maximum 2 revision rounds).
+
+  Step 5 — If exit code is 0 (review passed):
+    Proceed to Phase 3 (GitHub push).
+
+WHAT CLAUDE REVIEWS:
+
+  critical  — will definitely prevent the project from building
+              (bad XML class names, missing resources, wrong package, etc.)
+  high      — likely runtime crash or serious architecture violation
+              (wrong theme for setSupportActionBar, memory leaks, etc.)
+  medium    — best-practice violations
+              (hardcoded strings, missing null checks, wrong lifecycle, etc.)
+  low       — style and minor improvements
+
+  Also checks: hardcoded secrets, cleartext traffic, deprecated Gradle APIs,
+  @string/@color/@drawable references that don't exist in values files.
+
+THE prompt_for_model FIELD:
+
+This is the key output. It is a complete, self-contained instruction addressed
+directly to DeepSeek, ready to use with no reformatting:
+
+  Example: "In MainActivity.kt line 21, the theme Theme.MaterialComponents.Light
+  includes a built-in ActionBar which conflicts with setSupportActionBar().
+  Change the parent in themes.xml to Theme.MaterialComponents.Light.NoActionBar.
+  In activity_main.xml line 11, fix the class path: appbarwith should be appbar."
+
+Zoidberg reads this field and sends it as DeepSeek's next prompt, creating a
+feedback loop where Claude corrects DeepSeek's output before it is built.
+
+OUTPUT JSON FORMAT (.code-review-report.json):
+
+  {
+    "timestamp": "2026-03-26T12:00:00",
+    "model_used": "anthropic/claude-sonnet-4-6",
+    "overall_quality": "fair | poor | good | excellent",
+    "quality_score": 62,            (0-100)
+    "summary": "...",
+    "issues": [
+      {
+        "severity": "critical | high | medium | low",
+        "category": "build | architecture | resources | security | performance | style",
+        "file": "relative/path/to/file.kt",
+        "line": 11,
+        "issue": "description of the problem",
+        "suggestion": "concrete fix with code snippet"
+      }
+    ],
+    "issue_counts": { "critical": 1, "high": 2, "medium": 0, "low": 1 },
+    "prompt_for_model": "...",      (instruction for DeepSeek)
+    "passed": false                 (true if score >= threshold and no critical issues)
+  }
+
+SKILL.md HAS BEEN UPDATED to include:
+  - Phase 2.5 in the workflow section with all 5 steps documented
+  - Exact sessions_spawn() calls shown
+  - Model options (Sonnet default, Opus for deep review)
+  - Updated requirements section (no extra credentials needed)
+  - Updated File Reference section for code-reviewer.py
+
+--------------------------------------------------------------------------------
+SECTION 4 — HOUSEKEEPING
+--------------------------------------------------------------------------------
+
+.gitignore (NEW FILE — root of repository):
+  The repository had no .gitignore at all. Created with patterns covering:
+  Python bytecode (__pycache__/, *.pyc), virtual environments, runtime-generated
+  log and report files (.error-recovery.log, .error-report-*.json, etc.),
+  Android build outputs (*.apk, *.aab, .gradle/), IDE configs, OS files.
+
+CHANGES.md (NEW FILE — root of repository):
+  Structured record of every fix made during this session, organised by commit,
+  with file paths, line numbers, and explanations.
+
+CHAT_TRANSCRIPT.txt (NEW FILE — root of repository):
+  Full transcript of the review session conversation.
+
+OPENCLAW_SESSION_BRIEFING.txt (THIS FILE):
+  Summary document for sharing with OpenClaw.
+
+--------------------------------------------------------------------------------
+SECTION 5 — WHAT HAS NOT CHANGED
+--------------------------------------------------------------------------------
+
+The following were reviewed and found to be correct — no changes made:
+  - error-parser.py — logic and output format are sound
+  - settings.gradle.kts — correct repository configuration
+  - strings.xml, colors.xml — all resource references are valid
+  - AndroidManifest.xml — permissions and activity declarations are correct
+  - GitHub Actions workflow template — valid and functional
+  - All documentation files (README.md, BUILD_ANALYSIS.md, etc.)
+
+--------------------------------------------------------------------------------
+SECTION 6 — GIT HISTORY
+--------------------------------------------------------------------------------
+
+All changes were made on branch: claude/review-and-fix-repo-2G2gH
+Merged to main via PR #2 (squash merge) on 2026-03-26.
+
+Commits (before squash):
+  c6fe974 — Fix bugs in build pipeline scripts
+  d991127 — Add .gitignore for Python, Android, and editor artifacts
+  1acb455 — Fix build-blocking errors in basic-android-app template
+  52957f1 — Add session change log and chat transcript
+  d65b383 — Add Claude code review skill (Phase 2.5)
+  2791f5f — Refactor code-reviewer to use claude CLI (intermediate)
+  d2e51dd — Rearchitect code-reviewer to use sessions_spawn()
+
+Final squash commit on main: 49a3f313
+
+================================================================================
+END OF BRIEFING
+================================================================================
