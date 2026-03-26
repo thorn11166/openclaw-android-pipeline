@@ -1,0 +1,32 @@
+{
+  "total_errors": 2,
+  "errors_by_type": {
+    "gradle_sync": 2
+  },
+  "first_error": {
+    "error_type": "gradle_sync",
+    "line_number": 170,
+    "file_path": null,
+    "error_message": "2026-03-26T18:14:26.3282442Z FAILURE: Build failed with an exception.",
+    "suggestion": "Check build.gradle.kts for missing or incorrect dependency versions. Try: ./gradlew --refresh-dependencies clean build",
+    "raw_context": "2026-03-26T18:13:27.2293402Z Starting a Gradle Daemon (subsequent builds will be faster)\n2026-03-26T18:14:26.3280635Z \n2026-03-26T18:14:26.3282442Z FAILURE: Build failed with an exception.\n2026-03-26T18:14:26.3284019Z \n2026-03-26T18:14:26.3285340Z * Where:"
+  },
+  "all_errors": [
+    {
+      "error_type": "gradle_sync",
+      "line_number": 170,
+      "file_path": null,
+      "error_message": "2026-03-26T18:14:26.3282442Z FAILURE: Build failed with an exception.",
+      "suggestion": "Check build.gradle.kts for missing or incorrect dependency versions. Try: ./gradlew --refresh-dependencies clean build",
+      "raw_context": "2026-03-26T18:13:27.2293402Z Starting a Gradle Daemon (subsequent builds will be faster)\n2026-03-26T18:14:26.3280635Z \n2026-03-26T18:14:26.3282442Z FAILURE: Build failed with an exception.\n2026-03-26T18:14:26.3284019Z \n2026-03-26T18:14:26.3285340Z * Where:"
+    },
+    {
+      "error_type": "gradle_sync",
+      "line_number": 424,
+      "file_path": null,
+      "error_message": "2026-03-26T18:14:26.3282436Z FAILURE: Build failed with an exception.",
+      "suggestion": "Check build.gradle.kts for missing or incorrect dependency versions. Try: ./gradlew --refresh-dependencies clean build",
+      "raw_context": "2026-03-26T18:13:27.2293357Z Starting a Gradle Daemon (subsequent builds will be faster)\n2026-03-26T18:14:26.3280580Z \n2026-03-26T18:14:26.3282436Z FAILURE: Build failed with an exception.\n2026-03-26T18:14:26.3284014Z \n2026-03-26T18:14:26.3285335Z * Where:"
+    }
+  ]
+}
